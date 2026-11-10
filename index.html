@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IP / 网络检测工具</title>
+<style>
+  *{box-sizing:border-box} body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;background:#0f172a;color:#e2e8f0;margin:0;padding:24px}
+  .wrap{max-width:860px;margin:0 auto} h1{font-size:26px;margin:0 0 6px} p.sub{color:#94a3b8;margin:0 0 20px}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:12px;padding:18px;margin-bottom:16px}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid #334155}
+  .row:last-child{border-bottom:none} .k{color:#94a3b8} .v{font-weight:600;text-align:right;word-break:break-all}
+  button{background:#2563eb;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-size:15px;cursor:pointer;margin-right:8px}
+  button:hover{background:#1d4ed8} button.secondary{background:#334155}
+  .ok{color:#4ade80}.bad{color:#f87171}.muted{color:#94a3b8;font-size:13px}
+  table{width:100%;border-collapse:collapse} td{padding:8px 0;border-bottom:1px solid #334155} td:last-child{text-align:right;font-weight:600}
+  #status{margin:12px 0;color:#94a3b8}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌐 IP / 网络检测工具</h1>
+  <p class="sub">一键检测你的公网 IP、位置、运营商、时区、延迟与连通性。数据只在你的浏览器里查询，不会上传到任何服务器。</p>
+  <button onclick="runAll()">🔍 开始检测</button>
+  <button class="secondary" onclick="copyResult()">📋 复制结果</button>
+  <button class="secondary" onclick="downloadResult()">⬇️ 下载 JSON</button>
+  <div id="status">点击“开始检测”。</div>
+
+  <div class="card"><h2 style="margin:0 0 8px;font-size:18px">公网 IP 信息</h2><div id="ipinfo"><div class="row"><span class="k">状态</span><span class="v muted">未检测</span></div></div></div>
+
+  <div class="card"><h2 style="margin:0 0 8px;font-size:18px">延迟检测</h2><div id="latency"><div class="row"><span class="k">状态</span><span class="v muted">未检测</span></div></div></div>
+
+  <div class="card"><h2 style="margin:0 0 8px;font-size:18px">本地信息</h2><div id="local"><div class="row"><span class="k">浏览器时区</span><span class="v" id="tz">-</span></div><div class="row"><span class="k">本地时间</span><span class="v" id="now">-</span></div><div class="row"><span class="k">User-Agent</span><span class="v muted" id="ua" style="font-weight:400;font-size:13px">-</span></div><div class="row"><span class="k">本地 IP（WebRTC）</span><span class="v" id="localip">检测中…</span></div></div></div>
+  <p class="muted">提示：如果某个接口被墙或超时，会自动换下一个接口重试。延迟是用 fetch 计时测的，不是 ICMP ping，仅供参考。</p>
+</div>
+<script>
+let lastResult = {};
+function row(k,v){return `<div class="row"><span class="k">${k}</span><span class="v">${v||'-'}</span></div>`}
+async function fetchJson(url, timeout=8000){
+  const c = new AbortController(); const t = setTimeout(()=>c.abort(), timeout);
+  try{ const r = await fetch(url, {signal:c.signal}); clearTimeout(t); if(!r.ok) throw new Error(r.status); return await r.json(); }
+  catch(e){ clearTimeout(t); throw e; }
+}
+async function getIpInfo(){
+  const sources = [
+    {url:'https://ipapi.co/json/', map:d=>({ip:d.ip, city:d.city, region:d.region, country:d.country_name, org:d.org, asn:d.asn, timezone:d.timezone})},
+    {url:'https://ipinfo.io/json', map:d=>({ip:d.ip, city:d.city, region:d.region, country:d.country, org:d.org, asn:(d.org||'').split(' ')[0], timezone:d.timezone})},
+    {url:'https://ip-api.com/json/?fields=status,country,regionName,city,isp,org,as,query,timezone', map:d=>({ip:d.query, city:d.city, region:d.regionName, country:d.country, org:d.isp||d.org, asn:d.as, timezone:d.timezone})}
+  ];
+  for(const s of sources){
+    try{ const d = await fetchJson(s.url); const m = s.map(d); if(m.ip) return m; }catch(e){}
+  }
+  throw new Error('所有 IP 接口都失败');
+}
+async function measureLatency(url){
+  const t0 = performance.now();
+  try{ await fetch(url, {mode:'no-cors', cache:'no-store'}); return Math.round(performance.now()-t0); }
+  catch(e){ return null; }
+}
+async function runAll(){
+  document.getElementById('status').textContent = '检测中，请稍等…';
+  document.getElementById('tz').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone || '-';
+  document.getElementById('now').textContent = new Date().toLocaleString();
+  document.getElementById('ua').textContent = navigator.userAgent;
+  try{
+    const info = await getIpInfo();
+    lastResult.ip = info;
+    document.getElementById('ipinfo').innerHTML =
+      row('公网 IP', info.ip) + row('国家 / 地区', info.country) + row('城市', info.city) +
+      row('省份 / 州', info.region) + row('运营商 / ISP', info.org) + row('ASN', info.asn) + row('时区', info.timezone);
+  }catch(e){
+    document.getElementById('ipinfo').innerHTML = row('状态', '<span class="bad">检测失败，请检查网络后重试</span>');
+  }
+  const targets = [
+    ['Google', 'https://www.google.com/generate_204'],
+    ['Cloudflare', 'https://www.cloudflare.com/cdn-cgi/trace'],
+    ['GitHub', 'https://github.com'],
+    ['百度', 'https://www.baidu.com']
+  ];
+  let html = '';
+  lastResult.latency = {};
+  for(const [name, url] of targets){
+    const ms = await measureLatency(url);
+    lastResult.latency[name] = ms;
+    html += `<div class="row"><span class="k">${name}</span><span class="v ${ms===null?'bad':'ok'}">${ms===null?'超时 / 不通':ms+' ms'}</span></div>`;
+  }
+  document.getElementById('latency').innerHTML = html;
+  document.getElementById('status').textContent = '检测完成：' + new Date().toLocaleTimeString();
+  getLocalIp();
+}
+function getLocalIp(){
+  try{
+    const pc = new RTCPeerConnection({iceServers:[]});
+    pc.createDataChannel('');
+    pc.onicecandidate = e => {
+      if(e.candidate){ const m = e.candidate.candidate.match(/(\d+\.\d+\.\d+\.\d+)/); if(m) document.getElementById('localip').textContent = m[1]; }
+    };
+    pc.createOffer().then(o=>pc.setLocalDescription(o)).catch(()=>{ document.getElementById('localip').textContent = '无法获取'; });
+    setTimeout(()=>{ if(document.getElementById('localip').textContent==='检测中…') document.getElementById('localip').textContent = '无法获取'; }, 5000);
+  }catch(e){ document.getElementById('localip').textContent = '无法获取'; }
+}
+function copyResult(){
+  const text = JSON.stringify(lastResult, null, 2) || '还没有检测结果，先点开始检测';
+  navigator.clipboard.writeText(text).then(()=>alert('已复制到剪贴板'));
+}
+function downloadResult(){
+  const blob = new Blob([JSON.stringify(lastResult, null, 2)], {type:'application/json'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'ip-check-result.json'; a.click();
+}
+runAll();
+</script>
+</body>
+</html>
